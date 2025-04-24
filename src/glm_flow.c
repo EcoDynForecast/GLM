@@ -386,9 +386,6 @@ void do_single_outflow(AED_REAL HeightOfOutflow, AED_REAL flow, OutflowDataType 
             printf("%d DeltaV %8.4f; flow %10.4f;%10.4f %d %d %d %10.1f %10.1f \n",
                i,Delta_V[i],flow,Q_outf_star,Outflow_LayerNum,iBot,iTop,hBot,hTop);
 */
-            if ( ptm_sw ) {
-                ptm_removeparticles(i, Delta_V[i], Lake[i].LayerVol, max_particle_num);
-            }
             Lake[i].LayerVol -= Delta_V[i];
         }
         mb_sub_outflows(i, Delta_V[i]);
@@ -909,16 +906,6 @@ AED_REAL do_inflows()
 
                 Lake[Layer_subm].Density = calculate_density(Lake[Layer_subm].Temp, Lake[Layer_subm].Salinity);
                 Lake[Layer_subm].LayerVol = Lake[Layer_subm].LayerVol+(Inflows[iRiver].FlowRate*Inflows[iRiver].Factor);
-
-                if ( ptm_sw ) {
-                    // insert particles ---
-                    upper_height = Lake[Layer_subm].Height;
-                    lower_height = 0.0; if (Layer_subm>botmLayer) lower_height = Lake[Layer_subm-1].Height;
-                    double_particles = floor(Inflows[iRiver].ParticleConc * (Inflows[iRiver].FlowRate*Inflows[iRiver].Factor)); //@MEL implement this
-                    new_particles = (int) floor(double_particles);
-                    ptm_addparticles(new_particles, max_particle_num, upper_height, lower_height);
-                    // insert particles ---
-                }
 
                 Lake[botmLayer].Vol1 = Lake[botmLayer].LayerVol;
                 if (surfLayer != botmLayer) {
