@@ -965,10 +965,6 @@ AED_REAL do_inflows()
     resize_internals(2, botmLayer);
     check_layer_thickness();
 
-    //# Update particle vertical position due to inflow insertion
-    if ( ptm_sw )
-        ptm_layershift(0.0, Lake[surfLayer].Height - height_start);  // !!!! ASSUMING SHIFT IS ALL LAYERS
-
     return Lake[surfLayer].Vol1 - VolSum;
 }
 /*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
