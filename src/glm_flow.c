@@ -54,6 +54,7 @@
 #include "glm_output.h"
 
 #include "glm_balance.h"
+#include "glm_ptm.h"
 
 #include "glm_debug.h"
 
@@ -380,8 +381,16 @@ void do_single_outflow(AED_REAL HeightOfOutflow, AED_REAL flow, OutflowDataType 
      * Now we have Delta_V[i] for all layers we can remove it             *
      **********************************************************************/
     for (i = botmLayer; i <= surfLayer; i++){
-//      if (Delta_V[i] > zero) printf("%d DeltaV %8.4f; flow %10.4f;%10.4f %d %d %d %10.1f %10.1f \n",i,Delta_V[i],flow,Q_outf_star,Outflow_LayerNum,iBot,iTop,hBot,hTop);
-        if (Delta_V[i] > zero) Lake[i].LayerVol -= Delta_V[i];
+        if (Delta_V[i] > zero) {
+/*
+            printf("%d DeltaV %8.4f; flow %10.4f;%10.4f %d %d %d %10.1f %10.1f \n",
+               i,Delta_V[i],flow,Q_outf_star,Outflow_LayerNum,iBot,iTop,hBot,hTop);
+*/
+            if ( ptm_sw ) {
+                ptm_removeparticles(i, Delta_V[i], Lake[i].LayerVol, max_particle_num);
+            }
+            Lake[i].LayerVol -= Delta_V[i];
+        }
         mb_sub_outflows(i, Delta_V[i]);
     }
 
@@ -405,7 +414,7 @@ void do_single_outflow(AED_REAL HeightOfOutflow, AED_REAL flow, OutflowDataType 
  * Loop through all outflows and process - return the difference between      *
  *  total volume before and after.                                            *
  ******************************************************************************/
-AED_REAL do_outflows(int jday)
+AED_REAL do_outflows(int jday, AED_REAL day_fraction)
 {
     int i;
     AED_REAL DrawHeight = -1; //# Height of withdraw [m from bottom]
@@ -455,18 +464,19 @@ AED_REAL do_outflows(int jday)
         Outflows[i].Draw *= Outflows[i].Factor;
 
         do_single_outflow(DrawHeight, Outflows[i].Draw, &Outflows[i]);
+        // DrawHeight is layer where particles are; if know # of particles in
 
         write_outflow(i, jday, DrawHeight, tVolSum-Lake[surfLayer].Vol1, Outflows[i].Draw, hBot, hTop);
     }
     if (seepage) {
         if (seepage_rate>zero) {
             // Darcy's Law used, so input rate is hydraulic conductivity (m/day) x hydraulic head
-            SeepDraw = seepage_rate * Lake[surfLayer].Height * Lake[surfLayer].LayerArea * 0.95;
+            SeepDraw = seepage_rate * Lake[surfLayer].Height * Lake[surfLayer].LayerArea * 0.95 * day_fraction;
         } else {
             // Constant seepage assumed, so input rate is dh (m/day)
             // 0.95 added since the effective area of seeping is probably
             // a bit less than max area of water innundation???
-            SeepDraw = -seepage_rate * Lake[surfLayer].LayerArea * 0.95;
+            SeepDraw = -seepage_rate * Lake[surfLayer].LayerArea * 0.95 * day_fraction;
       }
         do_single_outflow(0., SeepDraw, NULL);
     }
@@ -482,7 +492,7 @@ AED_REAL do_outflows(int jday)
  * level.  Add in stack volumes when calculating overflow.                    *
  * After overflow, delete stack volumes from the structure.                   *
  ******************************************************************************/
-AED_REAL do_overflow(int jday)
+AED_REAL do_overflow(int jday, AED_REAL day_fraction)
 {
     AED_REAL VolSum = Lake[surfLayer].Vol1;
     AED_REAL DrawHeight = 0.;
@@ -492,8 +502,8 @@ AED_REAL do_overflow(int jday)
 
 
     if (VolSum > MaxVol){
-      do_single_outflow((CrestHeight+(MaxHeight-CrestHeight)*0.9), (VolSum - MaxVol), NULL);
-      overflow = VolSum - Lake[surfLayer].Vol1;
+        do_single_outflow((CrestHeight+(MaxHeight-CrestHeight)*0.9), (VolSum - MaxVol), NULL);
+        overflow = VolSum - Lake[surfLayer].Vol1;
     }
     VolSum = Lake[surfLayer].Vol1;
     // Water above the crest, which will overflow based on a weir equation
@@ -501,7 +511,7 @@ AED_REAL do_overflow(int jday)
         AED_REAL ovfl_Q, ovfl_dz;
 
         ovfl_dz = MAX( Lake[surfLayer].Height - CrestHeight, zero );
-        ovfl_Q = 2./3. * crest_factor * pow(2*g,0.5) * crest_width * pow(ovfl_dz,1.5);
+        ovfl_Q = 2./3. * crest_factor * pow(2*g,0.5) * crest_width * pow(ovfl_dz,1.5) * day_fraction * iSecsPerDay;
         ovfl_Q  = MIN( (VolSum - VolAtCrest) , ovfl_Q );
 
         do_single_outflow(CrestHeight, ovfl_Q , NULL);
@@ -757,6 +767,11 @@ AED_REAL do_inflows()
     AED_REAL Inflow_width;      //# Width of inflow [m]
     AED_REAL VolSum = Lake[surfLayer].Vol1; //# Total lake volume before inflows
 
+    int new_particles;
+    AED_REAL height_start = Lake[surfLayer].Height; //# Total lake height before inflows
+    AED_REAL double_particles;
+    AED_REAL upper_height, lower_height;
+
 /*----------------------------------------------------------------------------*/
 //BEGIN
 
@@ -895,6 +910,16 @@ AED_REAL do_inflows()
                 Lake[Layer_subm].Density = calculate_density(Lake[Layer_subm].Temp, Lake[Layer_subm].Salinity);
                 Lake[Layer_subm].LayerVol = Lake[Layer_subm].LayerVol+(Inflows[iRiver].FlowRate*Inflows[iRiver].Factor);
 
+                if ( ptm_sw ) {
+                    // insert particles ---
+                    upper_height = Lake[Layer_subm].Height;
+                    lower_height = 0.0; if (Layer_subm>botmLayer) lower_height = Lake[Layer_subm-1].Height;
+                    double_particles = floor(Inflows[iRiver].ParticleConc * (Inflows[iRiver].FlowRate*Inflows[iRiver].Factor)); //@MEL implement this
+                    new_particles = (int) floor(double_particles);
+                    ptm_addparticles(new_particles, max_particle_num, upper_height, lower_height);
+                    // insert particles ---
+                }
+
                 Lake[botmLayer].Vol1 = Lake[botmLayer].LayerVol;
                 if (surfLayer != botmLayer) {
                     for (j = (botmLayer+1); j <= surfLayer; j++)
@@ -908,6 +933,8 @@ AED_REAL do_inflows()
                     insert(Inflows[iRiver].QIns[j], Inflows[iRiver].DIIns[j], Inflows[iRiver].Phi,
                               Inflows[iRiver].TIns[j], Inflows[iRiver].SIns[j],
                                          WQ_VarsTmp[iRiver][j], SecsPerDay, &Inflow_width, &ll);
+                                         // QIns is flow; D depth, WQ vars defined above; need to pass particle
+                                         // fraction to insert routine
 
                     for (jk = Inflows[iRiver].InPar[j]-1; jk < Inflows[iRiver].iCnt-1; jk++) {
                         Inflows[iRiver].QDown[jk] = Inflows[iRiver].QDown[jk+1];
@@ -916,6 +943,7 @@ AED_REAL do_inflows()
 
                         for (wqidx = 0; wqidx < Num_WQ_Vars; wqidx++)
                             Inflows[iRiver].WQDown[jk][wqidx] = Inflows[iRiver].WQDown[jk+1][wqidx];
+                            // jk is the inflow parcel; wqidx is wq attribute; would need NDown for particles
 
                         Inflows[iRiver].DDown[jk] = Inflows[iRiver].DDown[jk+1];
                         Inflows[iRiver].DOld[jk] = Inflows[iRiver].DOld[jk+1];
@@ -955,6 +983,10 @@ AED_REAL do_inflows()
     //# Make adjustments to update the layer heights, based on these vol changes
     resize_internals(2, botmLayer);
     check_layer_thickness();
+
+    //# Update particle vertical position due to inflow insertion
+    if ( ptm_sw )
+        ptm_layershift(0.0, Lake[surfLayer].Height - height_start);  // !!!! ASSUMING SHIFT IS ALL LAYERS
 
     return Lake[surfLayer].Vol1 - VolSum;
 }
